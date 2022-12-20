@@ -83,6 +83,7 @@ var _ = Describe("Bridge infrastructure configurator", func() {
 			iface          *v1.Interface
 			podLink        *netlink.GenericLink
 			podIP          netlink.Addr
+			podIPv6        netlink.Addr
 			vmi            *v1.VirtualMachineInstance
 		)
 
@@ -91,6 +92,7 @@ var _ = Describe("Bridge infrastructure configurator", func() {
 			vmi = newVMIWithBridgeInterface("default", "vm1")
 			podLink = &netlink.GenericLink{LinkAttrs: netlink.LinkAttrs{Name: ifaceName, MTU: 1000}}
 			podIP = netlink.Addr{IPNet: &net.IPNet{IP: net.IPv4(10, 35, 0, 6), Mask: net.CIDRMask(24, 32)}}
+			podIPv6 = netlink.Addr{IPNet: &net.IPNet{IP: net.ParseIP("2001:db8:1::10:35:0:6"), Mask: net.CIDRMask(64, 128)}}
 			defaultGwRoute = netlink.Route{Dst: nil, Gw: net.IPv4(10, 35, 0, 1)}
 		})
 
@@ -102,11 +104,12 @@ var _ = Describe("Bridge infrastructure configurator", func() {
 				bridgeIfaceName,
 				launcherPID,
 				withLink(podLink),
-				withIPOnLink(podLink, podIP),
+				withIPOnLink(podLink, podIP, podIPv6),
 				withRoutesOnLink(podLink, defaultGwRoute))
 			Expect(bridgeConfigurator.DiscoverPodNetworkInterface(ifaceName)).To(Succeed())
 			Expect(bridgeConfigurator.podNicLink).To(Equal(podLink))
 			Expect(bridgeConfigurator.podIfaceIP).To(Equal(podIP))
+			Expect(bridgeConfigurator.podIfaceIPv6).To(Equal(podIPv6))
 			Expect(bridgeConfigurator.podIfaceRoutes).To(ConsistOf(defaultGwRoute))
 		})
 
@@ -651,8 +654,9 @@ var _ = Describe("Bridge infrastructure configurator", func() {
 
 		When("IPAM is enabled", func() {
 			var (
-				mac   net.HardwareAddr
-				podIP netlink.Addr
+				mac     net.HardwareAddr
+				podIP   netlink.Addr
+				podIPv6 netlink.Addr
 			)
 
 			createBridgeConfiguratorWithIPAM := func(mac net.HardwareAddr, podIP netlink.Addr, routes ...netlink.Route) *BridgePodNetworkConfigurator {
@@ -661,12 +665,14 @@ var _ = Describe("Bridge infrastructure configurator", func() {
 				bc.vmMac = &mac
 				bc.ipamEnabled = true
 				bc.podIfaceIP = podIP
+				bc.podIfaceIPv6 = podIPv6
 				bc.podIfaceRoutes = routes
 				return bc
 			}
 
 			BeforeEach(func() {
 				podIP = netlink.Addr{IPNet: &net.IPNet{IP: net.IPv4(10, 35, 0, 6), Mask: net.CIDRMask(24, 32)}}
+				podIPv6 = netlink.Addr{IPNet: &net.IPNet{IP: net.ParseIP("2001:db8:1::10:35:0:6"), Mask: net.CIDRMask(64, 128)}}
 				mac, _ = net.ParseMAC("AF:B3:1F:78:2A:CA")
 			})
 
@@ -684,6 +690,7 @@ var _ = Describe("Bridge infrastructure configurator", func() {
 						IPAMDisabled: false,
 						MAC:          mac,
 						IP:           podIP,
+						IPv6:         podIPv6,
 						Gateway:      defaultGwRoute.Gw,
 					}
 					Expect(createBridgeConfiguratorWithIPAM(
@@ -696,6 +703,7 @@ var _ = Describe("Bridge infrastructure configurator", func() {
 					IPAMDisabled: false,
 					MAC:          mac,
 					IP:           podIP,
+					IPv6:         podIPv6,
 				}
 				Expect(createBridgeConfiguratorWithIPAM(
 					mac, podIP).GenerateNonRecoverableDHCPConfig()).To(Equal(&expectedDhcpConfig))
@@ -720,7 +728,7 @@ func withLink(link netlink.Link) Option {
 
 func withIPOnLink(link netlink.Link, ips ...netlink.Addr) Option {
 	return func(handler *netdriver.MockNetworkHandler) {
-		handler.EXPECT().AddrList(link, netlink.FAMILY_V4).Return(ips, nil)
+		handler.EXPECT().AddrList(link, netlink.FAMILY_ALL).Return(ips, nil)
 	}
 }
 
@@ -738,7 +746,7 @@ func withErrorOnLinkRetrieval(link netlink.Link, expectedErrorString string) Opt
 
 func withErrorOnIPRetrieval(link netlink.Link, expectedErrorString string) Option {
 	return func(handler *netdriver.MockNetworkHandler) {
-		handler.EXPECT().AddrList(link, netlink.FAMILY_V4).Return([]netlink.Addr{}, fmt.Errorf(expectedErrorString))
+		handler.EXPECT().AddrList(link, netlink.FAMILY_ALL).Return([]netlink.Addr{}, fmt.Errorf(expectedErrorString))
 	}
 }
 

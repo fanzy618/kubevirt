@@ -26,6 +26,7 @@ type BridgePodNetworkConfigurator struct {
 	launcherPID         int
 	vmMac               *net.HardwareAddr
 	podIfaceIP          netlink.Addr
+	podIfaceIPv6        netlink.Addr
 	podNicLink          netlink.Link
 	podIfaceRoutes      []netlink.Route
 	tapDeviceName       string
@@ -50,18 +51,25 @@ func (b *BridgePodNetworkConfigurator) DiscoverPodNetworkInterface(podIfaceName 
 	}
 	b.podNicLink = link
 
-	addrList, err := b.handler.AddrList(b.podNicLink, netlink.FAMILY_V4)
+	addrList, err := b.handler.AddrList(b.podNicLink, netlink.FAMILY_ALL)
 	if err != nil {
 		log.Log.Reason(err).Errorf("failed to get an ip address for %s", podIfaceName)
 		return err
 	}
-	if len(addrList) == 0 {
-		b.ipamEnabled = false
-	} else {
-		b.podIfaceIP = addrList[0]
-		b.ipamEnabled = true
-		if err := b.learnInterfaceRoutes(); err != nil {
-			return err
+	//FIXME: May not work correctly if this is IPv6 only.
+	b.ipamEnabled = false
+	for _, addr := range addrList {
+		switch {
+		case addr.IP.To4() != nil:
+			if b.podIfaceIP.IPNet == nil {
+				b.ipamEnabled = true
+				b.podIfaceIP = addr
+				if err := b.learnInterfaceRoutes(); err != nil {
+					return err
+				}
+			}
+		case addr.IP.To16() != nil:
+			b.podIfaceIPv6 = addr
 		}
 	}
 
@@ -87,6 +95,7 @@ func (b *BridgePodNetworkConfigurator) GenerateNonRecoverableDHCPConfig() *cache
 		MAC:          *b.vmMac,
 		IPAMDisabled: !b.ipamEnabled,
 		IP:           b.podIfaceIP,
+		IPv6:         b.podIfaceIPv6,
 	}
 
 	if b.ipamEnabled && len(b.podIfaceRoutes) > 0 {
